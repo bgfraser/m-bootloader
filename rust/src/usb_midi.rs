@@ -148,7 +148,7 @@ fn usb() -> &'static mut Usb {
 }
 
 /// Waits until what the controller sent to memory can be read.
-fn memory_sync() {
+pub(crate) fn memory_sync() {
     #[cfg(target_arch = "pi32v2")]
     unsafe {
         core::arch::asm!("ssync", options(nostack, preserves_flags))
@@ -164,7 +164,7 @@ fn sie_start(command: u32) {
     sync_cpu();
 }
 
-fn sie_write(r: u32, v: u32) {
+pub(crate) fn sie_write(r: u32, v: u32) {
     if CON0.read() & 4 == 0 {
         return;
     }
@@ -175,7 +175,7 @@ fn sie_write(r: u32, v: u32) {
     }
 }
 
-fn sie_read(r: u32) -> u32 {
+pub(crate) fn sie_read(r: u32) -> u32 {
     if CON0.read() & 4 == 0 {
         return 0;
     }

@@ -9,6 +9,8 @@
 //! /MBOOT/MENU.BIN is a flat image linked for `STAGE2_ADDRESS`, entry at its first byte, at most `STAGE2_MAX` bytes,
 //! ending in an 8-byte trailer: "STG2", CRC16 (little endian) of everything before the trailer, two zero bytes. It is
 //! called with the LSB clock in MHz and may return.
+//!
+//! On the FM-1, the menu's USB DRIVE item loads /MBOOT/USB.BIN the same way from a USB flash drive (usb_drive.rs).
 use crate::formats::{crc16, le16, le32};
 use crate::hw::{Reg, Text, bit, sync_cpu};
 use crate::platform::{gpio_input, gpio_level, gpio_output, hal_delay_us};
@@ -21,16 +23,43 @@ const SPI1_BAUD: Reg = SPI1_CON.add(4);
 const SPI1_BUF: Reg = SPI1_CON.add(8);
 const CS: (u32, u32) = if cfg!(smk) { (2, 8) } else { (2, 7) };
 const DO: (u32, u32) = if cfg!(smk) { (1, 5) } else { (2, 8) };
-const NO_MENU: Text = text!("NO /MBOOT/MENU.BIN");
-const READ_ERROR: Text = text!("SD READ ERROR");
-const BAD_MENU: Text = text!("BAD MENU.BIN");
 type Block = [u8; 512];
+
+/// Where stage 2 comes from: how to read a sector, the file in /MBOOT, and what to show when it can't be loaded.
+struct Source {
+    read: fn(u32, &mut Block) -> bool,
+    file: &'static [u8; 11],
+    missing: Text,
+    bad: Text,
+    read_error: Text,
+    no_volume: Text,
+    not_fat: Text,
+}
+
+static SD: Source = Source {
+    read: sd_read,
+    file: b"MENU    BIN",
+    missing: text!("NO /MBOOT/MENU.BIN"),
+    bad: text!("BAD MENU.BIN"),
+    read_error: text!("SD READ ERROR"),
+    no_volume: text!("NO SD CARD"),
+    not_fat: text!("SD NOT FAT32"),
+};
+
+#[cfg(usb_drive)]
+static USB: Source = Source {
+    read: crate::usb_drive::read,
+    file: b"USB     BIN",
+    missing: text!("NO /MBOOT/USB.BIN"),
+    bad: text!("BAD USB.BIN"),
+    read_error: text!("USB READ ERROR"),
+    no_volume: text!("USB NOT FAT32"),
+    not_fat: text!("USB NOT FAT32"),
+};
 
 #[repr(align(4))]
 struct Card {
     block: Block,
-    /// High capacity: addressed by sector.
-    hc: bool,
     fat_lba: u32,
     data_lba: u32,
     /// Sectors in a cluster.
@@ -39,7 +68,6 @@ struct Card {
 
 static CARD: Global<Card> = Global::new(Card {
     block: [0; 512],
-    hc: false,
     fat_lba: 0,
     data_lba: 0,
     spc: 0,
@@ -84,9 +112,12 @@ fn cmd(c: u8, a: u32) -> u8 {
     r
 }
 
-fn rd(hc: bool, lba: u32, p: &mut Block) -> bool {
+/// High capacity: addressed by sector.
+static HC: Global<bool> = Global::new(false);
+
+fn sd_read(lba: u32, p: &mut Block) -> bool {
     let mut ok = false;
-    if cmd(17, if hc { lba } else { lba << 9 }) == 0 {
+    if cmd(17, if HC.read() { lba } else { lba << 9 }) == 0 {
         let (mut r, mut i) = (x(0xff), 0);
         while r == 0xff && i < 99_999 {
             r = x(0xff);
@@ -137,9 +168,9 @@ impl Card {
             }
             hal_delay_us(1000);
         }
-        self.hc = false;
+        HC.set(false);
         if r == 0 && v2 && cmd(58, 0) == 0 {
-            self.hc = x(0xff) & 0x40 != 0;
+            HC.set(x(0xff) & 0x40 != 0);
             x(0xff);
             x(0xff);
             x(0xff);
@@ -147,16 +178,12 @@ impl Card {
         r == 0
     }
 
-    fn read_cluster_sector(&mut self, c: u32, s: u32) -> bool {
-        rd(
-            self.hc,
-            self.data_lba + (c - 2) * self.spc + s,
-            &mut self.block,
-        )
+    fn read_cluster_sector(&mut self, src: &Source, c: u32, s: u32) -> bool {
+        (src.read)(self.data_lba + (c - 2) * self.spc + s, &mut self.block)
     }
 
-    fn next(&mut self, c: u32) -> u32 {
-        if !rd(self.hc, self.fat_lba + c / 128, &mut self.block) {
+    fn next(&mut self, src: &Source, c: u32) -> u32 {
+        if !(src.read)(self.fat_lba + c / 128, &mut self.block) {
             return 0;
         }
         let at = (c % 128 * 4) as usize;
@@ -167,6 +194,7 @@ impl Card {
     /// and size go to `found`.
     fn find(
         &mut self,
+        src: &Source,
         mut c: u32,
         name: &[u8; 11],
         kind: u8,
@@ -174,12 +202,12 @@ impl Card {
     ) -> Option<Text> {
         while cluster_ok(c) {
             for s in 0..self.spc {
-                if !self.read_cluster_sector(c, s) {
-                    return Some(READ_ERROR);
+                if !self.read_cluster_sector(src, c, s) {
+                    return Some(src.read_error);
                 }
                 for entry in self.block.as_chunks::<32>().0 {
                     if entry[0] == 0 {
-                        return Some(NO_MENU);
+                        return Some(src.missing);
                     }
                     if entry[..11] == *name && entry[11] & 0x18 == kind {
                         *found = (
@@ -190,39 +218,39 @@ impl Card {
                     }
                 }
             }
-            c = self.next(c);
+            c = self.next(src, c);
         }
-        Some(NO_MENU)
+        Some(src.missing)
     }
 
-    fn load(&mut self) -> Option<Text> {
+    fn load(&mut self, src: &Source) -> Option<Text> {
         let mut base = 0;
-        if !rd(self.hc, 0, &mut self.block) || le16(&self.block, 510) != 0xaa55 {
-            return Some(text!("NO SD CARD"));
+        if !(src.read)(0, &mut self.block) || le16(&self.block, 510) != 0xaa55 {
+            return Some(src.no_volume);
         }
         if le16(&self.block, 11) != 512 {
             base = le32(&self.block, 454);
-            if !rd(self.hc, base, &mut self.block) {
-                return Some(READ_ERROR);
+            if !(src.read)(base, &mut self.block) {
+                return Some(src.read_error);
             }
         }
         let b = &self.block;
         if le16(b, 11) != 512 || le16(b, 17) != 0 || b[13] == 0 {
-            return Some(text!("SD NOT FAT32"));
+            return Some(src.not_fat);
         }
         self.spc = b[13] as u32;
         self.fat_lba = base + le16(b, 14) as u32;
         self.data_lba = self.fat_lba + (b[16] as u32) * le32(b, 36);
         let mut found = (0, 0);
         let error = self
-            .find(le32(b, 44), b"MBOOT      ", 0x10, &mut found)
-            .or_else(|| self.find(found.0, b"MENU    BIN", 0, &mut found));
+            .find(src, le32(b, 44), b"MBOOT      ", 0x10, &mut found)
+            .or_else(|| self.find(src, found.0, src.file, 0, &mut found));
         if error.is_some() {
             return error;
         }
         let (mut c, size) = found;
         if !(16..=STAGE2_MAX).contains(&size) {
-            return Some(BAD_MENU);
+            return Some(src.bad);
         }
         // Safety: this RAM is the image's to load into (§11.5), in whole sectors.
         let image = unsafe {
@@ -234,25 +262,25 @@ impl Card {
         let mut blocks = image.as_chunks_mut::<512>().0.iter_mut();
         'file: loop {
             if !cluster_ok(c) {
-                return Some(BAD_MENU);
+                return Some(src.bad);
             }
             for s in 0..self.spc {
                 let Some(block) = blocks.next() else {
                     break 'file;
                 };
-                if !rd(self.hc, self.data_lba + (c - 2) * self.spc + s, block) {
-                    return Some(READ_ERROR);
+                if !(src.read)(self.data_lba + (c - 2) * self.spc + s, block) {
+                    return Some(src.read_error);
                 }
             }
             if blocks.len() == 0 {
                 break;
             }
-            c = self.next(c);
+            c = self.next(src, c);
         }
         let (body, trailer) = image[..size as usize].split_at(size as usize - 8);
         let trailer: &[u8; 8] = trailer.try_into().unwrap();
         if trailer[..4] != *b"STG2" || le16(trailer, 4) != crc16(0, body) {
-            return Some(BAD_MENU);
+            return Some(src.bad);
         }
         None
     }
@@ -294,18 +322,47 @@ pub fn sd_stage2(lsb_mhz: u32) -> Option<Text> {
     let mut error = Some(text!("NO SD CARD"));
     if card.init() {
         SPI1_BAUD.write(lsb_mhz / 4 - 1);
-        error = card.load();
+        error = card.load(&SD);
     }
     session_close();
     if error.is_some() {
         return error;
     }
+    run(lsb_mhz)
+}
+
+/// Calls the stage 2 that has been loaded.
+fn run(lsb_mhz: u32) -> Option<Text> {
     sync_cpu();
     #[cfg(not(platform_sim))]
     unsafe {
         core::mem::transmute::<usize, extern "C" fn(u32)>(STAGE2_ADDRESS)(lsb_mhz)
     }
+    // (The simulated chip runs nothing.)
+    #[cfg(platform_sim)]
+    let _ = lsb_mhz;
     None
+}
+
+/// How long the USB DRIVE item waits for a drive to attach.
+#[cfg(usb_drive)]
+const USB_WAIT_MS: u32 = 3000;
+
+/// Loads and calls /MBOOT/USB.BIN from a USB flash drive, as sd_stage2() does from the card.
+#[cfg(usb_drive)]
+pub fn usb_stage2(lsb_mhz: u32) -> Option<Text> {
+    use crate::usb_drive;
+    let card = unsafe { CARD.get() };
+    let mut error = usb_drive::open(lsb_mhz, USB_WAIT_MS);
+    if error.is_none() {
+        error = card.load(&USB);
+    }
+    // Stage 2 starts USB again itself.
+    usb_drive::close();
+    if error.is_some() {
+        return error;
+    }
+    run(lsb_mhz)
 }
 
 /// For the card's test (rust/tests/sdboot.rs), which drives the two halves by themselves.
@@ -318,6 +375,6 @@ pub mod test {
     }
 
     pub fn sd_test_load() -> Option<Text> {
-        unsafe { CARD.get() }.load()
+        unsafe { CARD.get() }.load(&SD)
     }
 }

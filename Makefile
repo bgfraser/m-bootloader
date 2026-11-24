@@ -122,7 +122,7 @@ build/installer-host: tests/installer_host.rs $(HOST_TOOL)
 define BOARD_template
 $$(eval $$(call RUST_template,build/$(1)/mboot.o,$(3)))
 $$(eval $$(call RUST_template,build/$(1)/s0/mboot.o,$(3) stage0))
-$$(eval $$(call RUST_template,build/$(1)/s1/mboot.o,$(3) stage1 $$(RUST_TEST)))
+$$(eval $$(call RUST_template,build/$(1)/s1/mboot.o,$(3) stage1 $(4) $$(RUST_TEST)))
 $$(eval $$(call RUST_template,build/$(1)/st/ota/mboot.o,$(3) ram_stage stage_ota))
 $$(eval $$(call RUST_template,build/$(1)/st/ram/mboot.o,$(3) ram_stage))
 build/$(1)/startup.o: src/startup.S build/boot_version.h Makefile
@@ -197,7 +197,8 @@ build/$(1)/stage-ram.bin: build/$(1)/stage-ram.elf tools/check_build.py
 	$(OBJCOPY) -O binary -j .text $$< $$@
 	python3 tools/check_build.py $$< $$@ 0x1c28000 0x1c30000 stage_entry > build/$(1)/stage-ram-size.json
 endef
-$(eval $(call BOARD_template,fm1,,))
+# The FM-1's stage 1 has the menu's USB DRIVE item (rust/src/usb_drive.rs).
+$(eval $(call BOARD_template,fm1,,,usb_drive))
 $(eval $(call BOARD_template,smk37,-DBOARD_SMK,smk))
 build/fm1/uboot.fwsc: build/fm1/uboot.boot build/fm1/installer.bin build/fm1/installer-sfx.bin tools/fwsc.py tools/bankcb.py
 	python3 tools/fwsc.py build --staged build/fm1/installer-sfx.bin fm1 $< build/fm1/installer.bin $@

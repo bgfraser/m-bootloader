@@ -38,6 +38,8 @@ pub mod test_request;
 pub mod upkr;
 #[cfg(not(any(stage0, boot_sim)))]
 pub mod usb_midi;
+#[cfg(usb_drive)]
+pub mod usb_drive;
 
 /// The tests (rust/tests/mod.rs), built in for this computer by `rustc --test`.
 #[cfg(test)]

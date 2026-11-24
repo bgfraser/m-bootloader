@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# Sizes of a branch's bootloader against where it left main, measured even when the branch is over a limit: the
+# limits are raised for this build only, and each figure is set against the real one. The ordinary build (build.yml)
+# still says whether the branch fits.
+name: Sizes
+
+on:
+  push:
+    branches: ['usb-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sizes:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Set up the pi32v2 LLVM toolchain (checks the release's SHA256SUMS)
+        id: toolchain
+        uses: jvitkauskas/pi32v2-isa/.github/actions/setup-pi32v2@66ac37bb2ae40e5dbbd5588a6a7c2d7baf829d7f
+        with:
+          version: pi32v2-23.1.6-2
+      - name: Point the build at the toolchain
+        shell: bash
+        run: echo "TOOLCHAIN=${{ steps.toolchain.outputs.path }}" >> "$GITHUB_ENV"
+      - name: Set up the pi32v2 Rust compiler, built on the toolchain's LLVM (checks the package's SHA-256)
+        shell: bash
+        env:
+          RELEASE: pi32v2-1.100.0-1
+          SHA256: efc89e3cd13b38a22d6698b3d965c0a754bda31c0299afc9b4d73f0a73595690
+        run: |
+          name=pi32v2-rust-${RELEASE#pi32v2-}-linux-x64
+          cd "$RUNNER_TEMP"
+          curl -fsSLo "$name.tar.xz" "https://github.com/jvitkauskas/pi32v2-rust/releases/download/$RELEASE/$name.tar.xz"
+          echo "$SHA256  $name.tar.xz" | sha256sum -c
+          tar -xJf "$name.tar.xz"
+          echo "PI32V2_RUST=$RUNNER_TEMP/$name" >> "$GITHUB_ENV"
+      - name: Install the Upkr packer, at a fixed commit
+        shell: bash
+        run: |
+          cargo install --locked --git https://github.com/exoticorn/upkr --rev a9e56d9d50d1f64cab7590f2c584a12b173e7715 --root "$RUNNER_TEMP/upkr" upkr
+          echo "UPKR=$RUNNER_TEMP/upkr/bin/upkr" >> "$GITHUB_ENV"
+      - name: Main, where the branch left it
+        shell: bash
+        run: git worktree add "$RUNNER_TEMP/base" "$(git merge-base HEAD origin/main)"
+      - name: Build both with the limits raised
+        shell: bash
+        run: |
+          for tree in "$GITHUB_WORKSPACE" "$RUNNER_TEMP/base"; do
+            (
+              cd "$tree"
+              # RAM: 32 KiB more for the stages; flash: 16 KiB more for the payload.
+              sed -i 's/LENGTH = 0x8800/LENGTH = 0x10800/' tools/stage0.ld.S
+              sed -i 's/0x1c0a800/0x1c12800/' tools/stage1.ld.S tools/join_stages.py
+              sed -i 's/0x3ef0/0x7ef0/' tools/join_stages.py
+              make -j2 build/fm1/payload.bin build/smk37/payload.bin
+            )
+          done
+      - name: Sizes
+        shell: bash
+        run: |
+          python3 - "$GITHUB_WORKSPACE" "$RUNNER_TEMP/base" <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, os, subprocess, sys
+          BASE, PAYLOAD, RAM = 0x1c02000, 16112, 29440
+          def sizes(tree, board):
+              d = f'{tree}/build/{board}'
+              j = json.load(open(f'{d}/size.json'))
+              nm = subprocess.run([os.environ['TOOLCHAIN'] + '/bin/llvm-nm', f'{d}/stage1.elf'], capture_output=True, text=True).stdout
+              sym = {l.split()[2]: int(l.split()[0], 16) for l in nm.splitlines() if len(l.split()) == 3}
+              return {'payload': j['payload_bytes'], 'stage 1 code': j['stage1_bytes'], 'stage 1 packed': j['stage1_packed_bytes'],
+                      'stage 1 .bss': sym['__bss_end'] - sym['__bss_start'], 'RAM': sym['__ram_end'] - BASE}
+          print('| Board | Figure | Main | Branch | Change | Limit | Free on the branch |')
+          print('|---|---|---:|---:|---:|---:|---:|')
+          for board in ('fm1', 'smk37'):
+              new, old = sizes(sys.argv[1], board), sizes(sys.argv[2], board)
+              for k in new:
+                  limit = {'payload': PAYLOAD, 'RAM': RAM}.get(k)
+                  free = '' if limit is None else f'{limit - new[k]:,}'
+                  print(f'| {board} | {k} | {old[k]:,} | {new[k]:,} | {new[k] - old[k]:+,} | {"" if limit is None else f"{limit:,}"} | {free} |')
+          EOF
+      - name: The maps, to see what takes the room
+        uses: actions/upload-artifact@v4
+        with:
+          name: sizes-${{ github.sha }}
+          path: |
+            build/fm1/stage1.map
+            build/fm1/size.json
+            build/smk37/size.json

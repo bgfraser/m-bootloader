@@ -19,6 +19,8 @@ use crate::platform::{
     hal_efuse, hal_fault_clear, hal_reset, hal_xip,
 };
 use crate::sdboot::{sd_probe, sd_stage2};
+#[cfg(usb_drive)]
+use crate::sdboot::usb_stage2;
 use crate::stage0::rom_download;
 use crate::{Aligned, Global, contract, display, text};
 
@@ -526,6 +528,8 @@ const BOOT_ANYWAY: u8 = 2;
 const SD_CARD: u8 = 4;
 #[cfg(any(not(boot_sim), midi_mode))]
 const MIDI_MODE: u8 = 5;
+#[cfg(usb_drive)]
+const USB_DRIVE: u8 = 6;
 
 /// Whether to start the app without checking it.
 #[inline(never)]
@@ -559,6 +563,9 @@ fn menu(work: &mut Work, retained: &mut Retained) -> bool {
         if card {
             add(text!("SD CARD"), SD_CARD);
         }
+        // Always there: a drive is only looked for once the item is chosen, as finding one takes a while.
+        #[cfg(usb_drive)]
+        add(text!("USB DRIVE"), USB_DRIVE);
         if state == AppState::Ok {
             add(text!("BOOT APP"), BOOT_APP);
         }
@@ -699,13 +706,26 @@ fn menu(work: &mut Work, retained: &mut Retained) -> bool {
             first_draw = true;
             continue;
         }
-        if action == SD_CARD {
+        #[cfg(usb_drive)]
+        let stage2 = action == SD_CARD || action == USB_DRIVE;
+        #[cfg(not(usb_drive))]
+        let stage2 = action == SD_CARD;
+        if stage2 {
             // The menu's LEDs drive the SMK-37's high-speed PHY, and stage 2 may want USB: give it back first.
             if SMK {
                 board_restore();
             }
-            // Stage 2 (/MBOOT/MENU.BIN) does what it likes, and resets or returns here.
-            REASON.set(sd_stage2(60));
+            // Stage 2 (/MBOOT/MENU.BIN, or USB.BIN) does what it likes, and resets or returns here.
+            #[cfg(usb_drive)]
+            let reason = if action == USB_DRIVE {
+                display::text(2, YELLOW, text!("LOOKING FOR DRIVE"));
+                usb_stage2(60)
+            } else {
+                sd_stage2(60)
+            };
+            #[cfg(not(usb_drive))]
+            let reason = sd_stage2(60);
+            REASON.set(reason);
             // And after this run, for the same reason.
             #[cfg(test_requests)]
             if asked::SD_RUN.read() {
@@ -719,7 +739,7 @@ fn menu(work: &mut Work, retained: &mut Retained) -> bool {
             // The image can leave the panel in any state, and setting it up again clears it.
             SCREEN_READY.set(display::init(BOARD));
         }
-        if action == SD_CARD || (action == BOOT_ANYWAY && !confirm()) {
+        if stage2 || (action == BOOT_ANYWAY && !confirm()) {
             release_select();
             (last, previous, stable) = (0, 0, 0);
             continue;
