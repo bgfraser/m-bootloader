@@ -1085,7 +1085,7 @@ A RAM app is a program that runs from RAM and leaves the firmware in flash as it
 | Range | Use |
 |---|---|
 | `0x01C30000` to below `0x01C7FD80` | The app's slot, including its `.bss` and stacks. |
-| `0x01C16800` to below `0x01C20000` | Free for an app, which can still return. No route uses it. Some DMA needs RAM below `0x01C20000`, such as WiFi transmit buffers in firmware projects, though that isn't tested from here. |
+| `0x01C16800` to below `0x01C20000` | Free for an app, which can still return. No route uses it. The FM-1's `USB DRIVE` item keeps its USB buffers from `0x01C16800` while it looks for a drive and loads from it, before any app runs. Some DMA needs RAM below `0x01C20000`, such as WiFi transmit buffers in firmware projects, though that isn't tested from here. |
 | `0x01C20000` to below `0x01C30000` | Stage 2 and the flash loader's slots. An app that writes here must reset, not return. |
 | `0x01C0A800` to below `0x01C16800` | The RAM stage from the update route. An app that writes here must reset, not return. |
 | Below `0x01C0A800` | The bootloader's RAM. An app that writes here must reset, not return. |

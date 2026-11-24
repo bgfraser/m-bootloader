@@ -9,7 +9,7 @@
 //! READ CAPACITY (10) and READ (10). The controller's registers go through the MIDI driver's spaced accesses.
 use crate::hw::{Reg, Text, bit, dma_address, sync_cpu};
 use crate::usb_midi::{memory_sync, sie_read, sie_write};
-use crate::{Aligned, Global, text};
+use crate::text;
 
 const CON0: Reg = Reg::at::<0x11800>();
 const EP0_CNT: Reg = CON0.add(8);
@@ -55,14 +55,6 @@ enum Fail {
 
 type Res<T> = Result<T, Fail>;
 
-// What the controller's DMA reads and writes (a packet, and 4 bytes more for the DMA's overrun on receive), and DATA
-// for what a control transfer or a short command brings back.
-static EP0: Global<Aligned<72>> = Global::new(Aligned([0; 72]));
-static TX: Global<Aligned<64>> = Global::new(Aligned([0; 64]));
-static RX: Global<Aligned<72>> = Global::new(Aligned([0; 72]));
-static DATA: Global<Aligned<256>> = Global::new(Aligned([0; 256]));
-
-#[derive(Clone, Copy)]
 struct State {
     ticks_per_ms: u32,
     mps0: u32,
@@ -74,25 +66,43 @@ struct State {
     sectors: u32,
 }
 
-static STATE: Global<State> = Global::new(State {
-    ticks_per_ms: 0,
-    mps0: 0,
-    ep_in: 0,
-    ep_out: 0,
-    mps: 0,
-    iface: 0,
-    tag: 0,
-    sectors: 0,
-});
+/// What the controller's DMA reads and writes (a packet, and 4 bytes more for the DMA's overrun on receive), `data`
+/// for what a control transfer or a short command brings back, and the driver's state.
+#[repr(C, align(4))]
+struct Ram {
+    ep0: [u8; 72],
+    tx: [u8; 64],
+    rx: [u8; 72],
+    data: [u8; 256],
+    state: State,
+}
 
-/// Safety, for every use: nothing here is entered from what it calls, and each of these is borrowed by one function
-/// at a time.
-fn buffer<const N: usize>(b: &'static Global<Aligned<N>>) -> &'static mut [u8; N] {
-    unsafe { &mut b.get().0 }
+/// Outside the bootloader's own RAM, which has no room for these: RAM that no route uses (docs/SPEC.md §11.8), and
+/// below 0x01C20000, as some DMA wants. Nothing else runs while the menu has this item, and `open()` sets up what it
+/// reads before reading it.
+const RAM: *mut Ram = 0x01c1_6800 as *mut Ram;
+const _: () = assert!(0x01c1_6800 + size_of::<Ram>() <= 0x01c2_0000);
+
+// Safety, for each of these: the RAM is this item's while it runs (above), nothing here is entered from what it calls,
+// and each part is borrowed by one function at a time. The parts don't overlap.
+fn ep0() -> &'static mut [u8; 72] {
+    unsafe { &mut *core::ptr::addr_of_mut!((*RAM).ep0) }
+}
+
+fn tx() -> &'static mut [u8; 64] {
+    unsafe { &mut *core::ptr::addr_of_mut!((*RAM).tx) }
+}
+
+fn rx() -> &'static mut [u8; 72] {
+    unsafe { &mut *core::ptr::addr_of_mut!((*RAM).rx) }
+}
+
+fn data() -> &'static mut [u8; 256] {
+    unsafe { &mut *core::ptr::addr_of_mut!((*RAM).data) }
 }
 
 fn state() -> &'static mut State {
-    unsafe { STATE.get() }
+    unsafe { &mut *core::ptr::addr_of_mut!((*RAM).state) }
 }
 
 fn now() -> u32 {
@@ -123,7 +133,7 @@ fn start() {
     // PHY on, SIE out of reset, VBUS valid; ID 0 = host
     CON0.set(0x25);
     wait_ms(2);
-    EP0_ADR.write(dma_address(buffer(&EP0).as_mut_ptr()));
+    EP0_ADR.write(dma_address(ep0().as_mut_ptr()));
 }
 
 /// A session with the device: true once it has connected at full speed (or low, not expected).
@@ -213,7 +223,7 @@ fn ep0_wait(mask: u32, want: u32) -> Res<()> {
 
 /// A control transfer with no data stage, or an IN one into `data`: the bytes it brought.
 fn control(address: u32, setup: [u8; 8]) -> Res<usize> {
-    let (ep0, data) = (buffer(&EP0), buffer(&DATA));
+    let (ep0, data) = (ep0(), data());
     let mps0 = state().mps0 as usize;
     let mut left = u16::from_le_bytes([setup[6], setup[7]]) as usize;
     let mut got = 0;
@@ -266,8 +276,8 @@ fn request(address: u32, kind: u8, req: u8, value: u32, index: u32, len: u32) ->
 
 /// Endpoint 1's pipes, both toggles at DATA0.
 fn bulk_setup() {
-    EP1_RADR.write(dma_address(buffer(&RX).as_mut_ptr()));
-    EP1_TADR.write(dma_address(buffer(&TX).as_mut_ptr()));
+    EP1_RADR.write(dma_address(rx().as_mut_ptr()));
+    EP1_TADR.write(dma_address(tx().as_mut_ptr()));
     sie_write(INDEX, 1);
     sie_write(RXMAXP, 0xff);
     sie_write(RXCSR2, 0);
@@ -330,7 +340,7 @@ fn ask_packet() {
 
 /// Up to `to.len()` bytes, ending early at a short packet: the bytes received.
 fn bulk_in(to: &mut [u8]) -> Res<usize> {
-    let rx = buffer(&RX);
+    let rx = rx();
     let mps = state().mps as usize;
     let (mut t0, mut errors, mut got) = (now(), 0, 0);
     sie_write(FADDR, ADDRESS);
@@ -413,7 +423,7 @@ fn enumerate() -> Option<Text> {
     if request(0, 0x80, 6, 0x100, 0, 8) != Ok(8) {
         return Some(ERROR);
     }
-    s.mps0 = match buffer(&DATA)[7] {
+    s.mps0 = match data()[7] {
         m @ 1..=64 => m as u32,
         _ => 8,
     };
@@ -427,7 +437,7 @@ fn enumerate() -> Option<Text> {
     let Ok(n) = request(ADDRESS, 0x80, 6, 0x200, 0, 255) else {
         return Some(ERROR);
     };
-    let data = buffer(&DATA);
+    let data = data();
     if n < 9 || !find_bulk(&data[..n]) {
         return Some(text!("NOT A USB DRIVE"));
     }
@@ -459,7 +469,7 @@ fn command(cdb: &[u8], to: &mut [u8]) -> (Status, usize) {
     let s = state();
     s.tag = s.tag.wrapping_add(1);
     let tag = s.tag.to_le_bytes();
-    let cbw = &mut buffer(&TX)[..31];
+    let cbw = &mut tx()[..31];
     cbw.fill(0);
     cbw[..4].copy_from_slice(b"USBC");
     cbw[4..8].copy_from_slice(&tag);
@@ -470,7 +480,7 @@ fn command(cdb: &[u8], to: &mut [u8]) -> (Status, usize) {
     let mut moved = 0;
     let mut status = Status::Failed;
     if bulk_out(31).is_ok() {
-        let data = match if to.is_empty() { Ok(0) } else { bulk_in(to) } {
+        let stage = match if to.is_empty() { Ok(0) } else { bulk_in(to) } {
             Ok(n) => {
                 moved = n;
                 Ok(())
@@ -482,8 +492,8 @@ fn command(cdb: &[u8], to: &mut [u8]) -> (Status, usize) {
             }
             Err(e) => Err(e),
         };
-        if data.is_ok() {
-            let csw = &mut buffer(&DATA)[..13];
+        if stage.is_ok() {
+            let csw = &mut data()[..13];
             let mut r = bulk_in(csw);
             if r == Err(Fail::Stall) {
                 clear_halt(true);
