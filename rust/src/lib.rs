@@ -40,6 +40,9 @@ pub mod upkr;
 pub mod usb_midi;
 #[cfg(usb_drive)]
 pub mod usb_drive;
+// (Built with usb_drive too: the item, tried from RAM.)
+#[cfg(usb_test)]
+pub mod usb_test;
 
 /// The tests (rust/tests/mod.rs), built in for this computer by `rustc --test`.
 #[cfg(test)]

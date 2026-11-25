@@ -66,6 +66,12 @@ jobs:
               make -j2 build/fm1/installer-sfx.bin build/smk37/installer-sfx.bin || true
             )
           done
+      - name: The USB DRIVE item from RAM, for run-ram, with the real limits
+        shell: bash
+        run: |
+          git checkout -- tools
+          make -j2 build/fm1/usb-test.bin
+          echo "usb-test.bin: $(cat build/fm1/usb-test-size.json)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Sizes
         shell: bash
         run: |
@@ -95,6 +101,16 @@ jobs:
                   limit = {'payload': PAYLOAD, 'RAM': RAM, 'package': STORED_MAX, 'package, plain installer': STORED_MAX}.get(k)
                   free = '' if limit is None else f'{limit - new[k]:,}'
                   print(f'| {board} | {k} | {old[k]:,} | {new[k]:,} | {new[k] - old[k]:+,} | {"" if limit is None else f"{limit:,}"} | {free} |')
+          # Stage 0 holds the key for download mode (SPEC §4.4): whether the branch changed its code, apart from the
+          # version text. Both trees are built with the same raised limits, so the two are comparable.
+          print()
+          for board in ('fm1', 'smk37'):
+              new, old = (json.load(open(f'{t}/build/{board}/size.json')) for t in sys.argv[1:3])
+              same = new['stage0_code_sha256'] == old['stage0_code_sha256']
+              print(f'{board} stage 0: {"the same code as main" if same else "DIFFERENT code from main"}, '
+                    f'{new["stage0_bytes"]:,} bytes (main {old["stage0_bytes"]:,})')
+              if not same:
+                  print(f'::warning::{board}: stage 0 differs from main', file=sys.stderr)
           EOF
       - name: The maps, to see what takes the room
         uses: actions/upload-artifact@v4
@@ -104,3 +120,5 @@ jobs:
             build/fm1/stage1.map
             build/fm1/size.json
             build/smk37/size.json
+            build/fm1/usb-test.bin
+            build/fm1/usb-test.map

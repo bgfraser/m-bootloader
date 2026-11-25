@@ -200,6 +200,19 @@ endef
 # The FM-1's stage 1 has the menu's USB DRIVE item (rust/src/usb_drive.rs).
 $(eval $(call BOARD_template,fm1,,,usb_drive))
 $(eval $(call BOARD_template,smk37,-DBOARD_SMK,smk))
+# The FM-1's USB DRIVE item tried from RAM, for M-Flasher's run-ram (rust/src/usb_test.rs): the RAM stage's entry and
+# set-up, linked at 0x01C40000, out of the way of USB.BIN, which loads at 0x01C28000.
+$(eval $(call RUST_template,build/fm1/usb-test/mboot.o,usb_test usb_drive))
+build/fm1/usb-test.ld: tools/target.ld.S
+	@mkdir -p $(@D)
+	$(CLANG) -E -P -x c -DENTRY_SYMBOL=stage_entry -DRAM_ORIGIN=0x1c40000 -DRAM_LENGTH=0x10000 -DINSTALLER_BUILD $< -o $@
+build/fm1/usb-test.elf: build/fm1/usb-test/mboot.o $(RUST_CORE_lto) build/fm1/stage_start.o build/fm1/usb-test.ld
+	$(LINK) --plugin-opt=O3 --relax --gc-sections -T build/fm1/usb-test.ld -Map build/fm1/usb-test.map -o $@ $(filter %.o,$^)
+build/fm1/usb-test.bin: build/fm1/usb-test.elf tools/check_build.py
+	$(OBJCOPY) -O binary -j .text $< $@
+	python3 tools/check_build.py $< $@ 0x1c40000 0x1c50000 stage_entry > build/fm1/usb-test-size.json
+usb-test: build/fm1/usb-test.bin
+.PHONY: usb-test
 build/fm1/uboot.fwsc: build/fm1/uboot.boot build/fm1/installer.bin build/fm1/installer-sfx.bin tools/fwsc.py tools/bankcb.py
 	python3 tools/fwsc.py build --staged build/fm1/installer-sfx.bin fm1 $< build/fm1/installer.bin $@
 build/smk37/uboot-%.fwsc: build/smk37/uboot.boot build/smk37/installer.bin build/smk37/installer-sfx.bin tools/fwsc.py tools/bankcb.py
