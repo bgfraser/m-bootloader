@@ -8,8 +8,8 @@
 //! transfers with an IN data stage or none, one bulk IN and one bulk OUT pipe, and TEST UNIT READY, REQUEST SENSE,
 //! READ CAPACITY (10) and READ (10). The controller's registers go through the MIDI driver's spaced accesses.
 use crate::hw::{Reg, Text, bit, dma_address, sync_cpu};
-use crate::usb_midi::{memory_sync, sie_read, sie_write};
 use crate::text;
+use crate::usb_midi::{memory_sync, sie_read, sie_write};
 
 const CON0: Reg = Reg::at::<0x11800>();
 const EP0_CNT: Reg = CON0.add(8);

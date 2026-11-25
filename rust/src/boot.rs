@@ -18,9 +18,9 @@ use crate::platform::{
     Chip, flash_capacity, flash_init, flash_jedec, flash_read_width, flash_release, hal_delay_us,
     hal_efuse, hal_fault_clear, hal_reset, hal_xip,
 };
-use crate::sdboot::{sd_probe, sd_stage2};
 #[cfg(usb_drive)]
 use crate::sdboot::{USB_WAIT_MS, usb_stage2};
+use crate::sdboot::{sd_probe, sd_stage2};
 use crate::stage0::rom_download;
 use crate::{Aligned, Global, contract, display, text};
 

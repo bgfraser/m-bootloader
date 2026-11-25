@@ -37,6 +37,7 @@ HOST_TOOL := build/host/tool/libmboot.rlib
 # The tests' programs, each built with the --cfg names in its directory's name (rust/tests/mod.rs).
 RUST_TEST_SETS := host platform_sim-platform_test platform_sim-import_early-panel_test \
 	platform_sim-import_early-sdboot_test platform_sim-import_early-sdboot_test-smk \
+	platform_sim-import_early-usb_drive-usb_drive_test \
 	mu_test_app_ram mu_test_app_ram-smk boot_sim-platform_sim-lifecycle_test \
 	boot_sim-platform_sim boot_sim-platform_sim-smk boot_sim-platform_sim-test_requests \
 	boot_sim-platform_sim-midi_mode-mu_test_app_ram boot_sim-platform_sim-midi_mode-mu_test_app_ram-smk

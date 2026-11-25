@@ -16,13 +16,16 @@ mod loader;
 mod midi_update;
 
 // The drivers, on registers that the test stands in for (`platform_sim`), each with what it stands in for besides:
-// `platform_test`; `import_early panel_test`; `import_early sdboot_test`, and `smk`.
+// `platform_test`; `import_early panel_test`; `import_early sdboot_test`, and `smk`; `import_early usb_drive
+// usb_drive_test`, the FM-1's USB DRIVE item with a simulated controller and drive.
 #[cfg(panel_test)]
 mod panel_board;
 #[cfg(platform_test)]
 mod platform;
 #[cfg(sdboot_test)]
 mod sdboot;
+#[cfg(usb_drive_test)]
+mod usb_drive;
 
 // The bootloader on the simulated chip (`boot_sim platform_sim`): the flash loader's life on it (`lifecycle_test`),
 // the boots of each board (`smk`; `test_requests`), and MIDI mode in them (`midi_mode mu_test_app_ram`).
@@ -50,6 +53,8 @@ pub use platform::platform_register;
 pub use sdboot::platform_register;
 #[cfg(boot_sim)]
 pub use sim::{boot_sim_settle, platform_dma_address, platform_register};
+#[cfg(usb_drive_test)]
+pub use usb_drive::platform_register;
 // The reset, the card, and the application's and a staged updater's starts.
 #[cfg(all(boot_sim, not(lifecycle_test)))]
 pub use boot::{boot_sim_call_app, boot_sim_call_updater, boot_sim_reset, sd_probe, sd_stage2};
