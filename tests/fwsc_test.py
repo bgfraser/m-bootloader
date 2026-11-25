@@ -220,11 +220,12 @@ for variant, (path, identity) in BUILT.items():
     listed = members(image)
     assert list(listed) == ['ota.bin'] and listed['ota.bin'][0] == OTA_TYPE
     assert host('decode', *stage_for_decode(listed['ota.bin'][1])) == self_extracting[board]
-    assert unweave(package(variant, containers[board], installers[board], '042'))[0] == identity[:-3] + '042'
+    # Self-extracting, as releases are: the FM-1's plain installer, with the USB DRIVE item, is over STORED_MAX.
+    assert unweave(package(variant, containers[board], installers[board], '042', self_extracting[board]))[0] == identity[:-3] + '042'
     refuses(package, variant, containers[other], installers[board])
     refuses(package, variant, containers[board], installers[other])
     for version in ('99', '0999', '09a', ''):
-        refuses(package, variant, containers[board], installers[board], version)
+        refuses(package, variant, containers[board], installers[board], version, self_extracting[board])
     for at in (0, 2, HEAD + 4, HEAD + 12, FIRST + 40, FIRST + 100):
         bad = bytearray(image)
         bad[at] ^= 1
