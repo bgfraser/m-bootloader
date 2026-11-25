@@ -36,10 +36,10 @@ pub mod stage0;
 pub mod test_request;
 #[cfg(not(stage1))]
 pub mod upkr;
-#[cfg(not(any(stage0, boot_sim)))]
-pub mod usb_midi;
 #[cfg(usb_drive)]
 pub mod usb_drive;
+#[cfg(not(any(stage0, boot_sim)))]
+pub mod usb_midi;
 // (Built with usb_drive too: the item, tried from RAM.)
 #[cfg(usb_test)]
 pub mod usb_test;
