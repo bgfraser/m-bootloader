@@ -344,16 +344,17 @@ fn run(lsb_mhz: u32) -> Option<Text> {
     None
 }
 
-/// How long the USB DRIVE item waits for a drive to attach.
+/// How long the menu's USB DRIVE item waits for a drive to attach: it's plugged in before the item is chosen.
 #[cfg(usb_drive)]
-const USB_WAIT_MS: u32 = 3000;
+pub const USB_WAIT_MS: u32 = 3000;
 
-/// Loads and calls /MBOOT/USB.BIN from a USB flash drive, as sd_stage2() does from the card.
+/// Loads and calls /MBOOT/USB.BIN from a USB flash drive, as sd_stage2() does from the card, waiting up to `wait_ms`
+/// for the drive.
 #[cfg(usb_drive)]
-pub fn usb_stage2(lsb_mhz: u32) -> Option<Text> {
+pub fn usb_stage2(lsb_mhz: u32, wait_ms: u32) -> Option<Text> {
     use crate::usb_drive;
     let card = unsafe { CARD.get() };
-    let mut error = usb_drive::open(lsb_mhz, USB_WAIT_MS);
+    let mut error = usb_drive::open(lsb_mhz, wait_ms);
     if error.is_none() {
         error = card.load(&USB);
     }

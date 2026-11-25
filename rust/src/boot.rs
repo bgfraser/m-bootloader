@@ -20,7 +20,7 @@ use crate::platform::{
 };
 use crate::sdboot::{sd_probe, sd_stage2};
 #[cfg(usb_drive)]
-use crate::sdboot::usb_stage2;
+use crate::sdboot::{USB_WAIT_MS, usb_stage2};
 use crate::stage0::rom_download;
 use crate::{Aligned, Global, contract, display, text};
 
@@ -719,7 +719,7 @@ fn menu(work: &mut Work, retained: &mut Retained) -> bool {
             #[cfg(usb_drive)]
             let reason = if action == USB_DRIVE {
                 display::text(2, YELLOW, text!("LOOKING FOR DRIVE"));
-                usb_stage2(60)
+                usb_stage2(60, USB_WAIT_MS)
             } else {
                 sd_stage2(60)
             };

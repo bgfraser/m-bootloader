@@ -3,7 +3,8 @@
 //! this from download mode, and it writes nothing to flash.
 //!
 //! It sets the unit up as the RAM stage does from run-ram (stage.rs), then does what choosing the item does
-//! (`usb_stage2`): waits for a drive, loads /MBOOT/USB.BIN from it and runs it. If that returns or fails, it says so
+//! (`usb_stage2`): waits for a drive, loads /MBOOT/USB.BIN from it and runs it. It waits 30 s for the drive, not the
+//! menu's 3 s, for time to move the cable from the computer to the drive. If that returns or fails, it says so
 //! on the screen and resets. It's linked at 0x01C40000, out of the way of USB.BIN (0x01C28000, with its data above)
 //! and of the item's USB buffers (0x01C16800).
 //!
@@ -18,6 +19,8 @@ use crate::text;
 
 /// The LSB clock that hal_clock_b() gives.
 const LSB_MHZ: u32 = 48;
+/// How long it waits for the drive, which is plugged in once run-ram has started this.
+const WAIT_MS: u32 = 30_000;
 /// How long the result stays on the screen before the reset.
 const SHOW_S: u32 = 30;
 
@@ -43,9 +46,10 @@ pub extern "C" fn stage_main(_context: *mut u8, _stream_end: u32) -> ! {
     let screen = display::init(1);
     if screen {
         display::text(1, GREEN, text!("USB DRIVE TEST"));
-        display::text(3, YELLOW, text!("LOOKING FOR DRIVE"));
+        display::text(3, YELLOW, text!("CONNECT THE DRIVE"));
+        display::text(4, YELLOW, text!("WITHIN 30 S"));
     }
-    let reason = usb_stage2(LSB_MHZ);
+    let reason = usb_stage2(LSB_MHZ, WAIT_MS);
     // USB.BIN may have left the flash interface and the panel in any state.
     flash_init(1, 1);
     if display::init(1) {
